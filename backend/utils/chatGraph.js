@@ -17,11 +17,44 @@ const llm = new ChatGroq({
 const client = new MongoClient(process.env.MONGODB_URI, );
 const checkpointer = new MongoDBSaver({ client, dbName: "langgraph" });
 
+// How many past messages the model sees on each request
+const MAX_HISTORY_MESSAGES = 4
+
 const chatNode =async (state, config)=>{
-// An agent's system prompt is passed per request, so it isn't saved in the chat history
-const systemPrompt = config?.configurable?.systemPrompt
-const messages = systemPrompt ? [new SystemMessage(systemPrompt), ...state.messages] : state.messages
-const response = await llm.invoke(messages)
+// The agent (if any) is passed per request, so the system prompt isn't saved in the chat history
+const agent = config?.configurable?.agent || {}
+const userName = config?.configurable?.userName
+
+// Built on every call so the date and time are always current
+const currentDateTime=new Intl.DateTimeFormat("en-IN",{
+    timeZone:"Asia/Kolkata",
+    dateStyle:"full",
+    timeStyle:"long"
+}).format(new Date())
+
+const systemPrompt = `
+${agent.instructions || "You are AutoMate AI, a helpful personal assistant."}
+${agent.name ? `Your name is ${agent.name}.` : ""}
+
+CURRENT DATE AND TIME:
+- Current date and time in Asia/Kolkata: ${currentDateTime}
+- Resolve today, tomorrow, and weekday references using this timestamp.
+- Do not ask the user to confirm a date that can be resolved.
+
+DEFAULT SETTINGS:
+- Default timezone: Asia/Kolkata (IST) unless the user says otherwise.
+- Reply in the same language the user writes in.
+- Keep answers clear and concise; use lists or steps when they help.
+${userName ? `- The user's name is ${userName}.` : ""}
+
+${agent.knowledgeBase ? `KNOWLEDGE BASE:
+Use this information when it is relevant to the user's question.
+${agent.knowledgeBase}` : ""}
+`.trim()
+
+// Only send the most recent messages to the model to keep requests small
+const recentMessages = state.messages.slice(-MAX_HISTORY_MESSAGES)
+const response = await llm.invoke([new SystemMessage(systemPrompt), ...recentMessages])
 return {
     messages: [response],
 }

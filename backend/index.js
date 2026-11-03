@@ -8,6 +8,7 @@ import { login, logout, me } from "./controllers/auth.controller.js";
 import protect from "./middleware/project.js";  
 import agentrouter from "./routes/agent.route.js";
 import chatrouter from "./routes/chat.route.js";
+import { getMcpTools } from "./mcp/langGraph-mcp-adapter.js";
 dotenv.config();
 
 const port = process.env.PORT || 5000;

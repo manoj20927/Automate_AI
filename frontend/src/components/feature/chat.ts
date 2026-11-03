@@ -7,3 +7,11 @@ export const chat=async ({message, agentId}:any)=>{
         console.log(error)
     }
 }
+export const agentChat=async ({message, agent}:any)=>{
+    try {
+        const {data}= await api.post("/api/chat/agent", {message, agent: agent || undefined})
+        return data
+    } catch (error) {
+        console.log(error)
+    }
+}

@@ -26,7 +26,7 @@ import { logoutUser } from '@/components/feature/auth'
 import { setUserData } from '@/components/redux/userSlice'
 import { getAllAgents } from '../feature/agents'
 import { setAgents, setAgentsLoading, setSelectedAgent } from '../redux/agentSlice'
-import { chat } from '../feature/chat'
+import { agentChat, chat } from '../feature/chat'
 
 interface UserInfo {
   _id?: string
@@ -119,7 +119,12 @@ dispatch(setAgentsLoading(false))
     setInput('')
     setIsSending(true)
     try {
-      const reply = await chat({ message, agentId: currentAgent?._id })
+      // No agent selected: normal chat. Agent selected: agent chat with its tools
+      const res = currentAgent
+        ? await agentChat({ message, agent: currentAgent.name })
+        : await chat({ message })
+      // Backend may reply with a plain string or an { aiResponse } object
+      const reply = typeof res === 'string' ? res : res?.aiResponse
       setMessages((prev) => [
         ...prev,
         reply
