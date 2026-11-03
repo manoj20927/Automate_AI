@@ -29,6 +29,7 @@ export const chat = async (req, res) => {
       thread_id: threadId,
       systemPrompt,
     },
+    recursionLimit:5
    });
    const lastMessage = data.messages[data.messages.length - 1].content;
   return res.status(200).json(lastMessage);
@@ -61,6 +62,7 @@ export const agentChat = async (req, res) => {
       thread_id: threadId,
       systemPrompt,
     },
+    recursionLimit:5
    });
    const lastMessage = response.messages[response.messages.length - 1].content;
   return res.status(200).json(lastMessage);
