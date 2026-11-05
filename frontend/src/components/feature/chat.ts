@@ -15,3 +15,11 @@ export const agentChat=async ({message, agent}:any)=>{
         console.log(error)
     }
 }
+export const approveAgentAction=async ({agent, approved}:any)=>{
+    try {
+        const {data}= await api.post("/api/chat/agent/approve", {agent, approved})
+        return data
+    } catch (error) {
+        console.log(error)
+    }
+}

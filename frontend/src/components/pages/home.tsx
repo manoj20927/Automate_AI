@@ -26,7 +26,7 @@ import { logoutUser } from '@/components/feature/auth'
 import { setUserData } from '@/components/redux/userSlice'
 import { getAllAgents } from '../feature/agents'
 import { setAgents, setAgentsLoading, setSelectedAgent } from '../redux/agentSlice'
-import { agentChat, chat } from '../feature/chat'
+import { agentChat, approveAgentAction, chat } from '../feature/chat'
 
 interface UserInfo {
   _id?: string
@@ -43,6 +43,17 @@ interface Message {
   isError?: boolean
 }
 
+interface PendingAction {
+  name: string
+  args: Record<string, unknown>
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  send_email: 'Send this email?',
+  create_calendar_event: 'Create this calendar event?',
+  publish_instagram_image: 'Publish this Instagram post?',
+}
+
 interface ReduxState {
   user: {
     userData: UserInfo | null
@@ -57,6 +68,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const rawUserData = useSelector((state: ReduxState) => state.user.userData)
@@ -100,7 +112,7 @@ dispatch(setAgentsLoading(false))
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isSending])
+  }, [messages, isSending, pendingActions])
 
   // Grow the textarea with its content, up to a max height
   useEffect(() => {
@@ -110,10 +122,36 @@ dispatch(setAgentsLoading(false))
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [input])
 
+  // The agent either replied, or paused to ask for approval
+  function showReply(res: any) {
+    if (res?.approval) {
+      setPendingActions(res.approval.actions)
+      return
+    }
+    // Backend may reply with a plain string or an { aiResponse } object
+    const reply = typeof res === 'string' ? res : res?.aiResponse
+    setMessages((prev) => [
+      ...prev,
+      reply
+        ? { role: 'ai', content: String(reply) }
+        : { role: 'ai', content: 'Something went wrong. Please try again.', isError: true },
+    ])
+  }
+
+  async function handleApproval(approved: boolean) {
+    setPendingActions([])
+    setIsSending(true)
+    try {
+      showReply(await approveAgentAction({ agent: currentAgent?.name, approved }))
+    } finally {
+      setIsSending(false)
+    }
+  }
+
   async function handleSend(e?: FormEvent) {
     e?.preventDefault()
     const message = input.trim()
-    if (!message || isSending) return
+    if (!message || isSending || pendingActions.length) return
 
     setMessages((prev) => [...prev, { role: 'human', content: message }])
     setInput('')
@@ -123,14 +161,7 @@ dispatch(setAgentsLoading(false))
       const res = currentAgent
         ? await agentChat({ message, agent: currentAgent.name })
         : await chat({ message })
-      // Backend may reply with a plain string or an { aiResponse } object
-      const reply = typeof res === 'string' ? res : res?.aiResponse
-      setMessages((prev) => [
-        ...prev,
-        reply
-          ? { role: 'ai', content: String(reply) }
-          : { role: 'ai', content: 'Something went wrong. Please try again.', isError: true },
-      ])
+      showReply(res)
     } finally {
       setIsSending(false)
     }
@@ -333,6 +364,47 @@ dispatch(setAgentsLoading(false))
               )
             )}
 
+            {pendingActions.length > 0 && (
+              <div className="flex items-start gap-3">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-md">
+                  <Workflow className="size-4" />
+                </div>
+                <div className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+                  {pendingActions.map((action, i) => (
+                    <div key={i} className="mb-4">
+                      <p className="text-sm font-semibold text-white">
+                        {ACTION_LABELS[action.name] || `Run ${action.name}?`}
+                      </p>
+                      <dl className="mt-2 space-y-1.5">
+                        {Object.entries(action.args).map(([key, value]) => (
+                          <div key={key} className="text-sm">
+                            <dt className="text-xs capitalize text-zinc-500">{key}</dt>
+                            <dd className="whitespace-pre-wrap break-words text-zinc-200">{String(value)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleApproval(true)}
+                      className="cursor-pointer rounded-xl bg-white px-4 py-2 text-sm font-semibold text-zinc-950 transition-all hover:bg-zinc-200"
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApproval(false)}
+                      className="cursor-pointer rounded-xl px-4 py-2 text-sm font-medium text-zinc-400 transition-colors hover:bg-white/[0.05] hover:text-white"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {isSending && (
               <div className="flex items-start gap-3">
                 <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-white text-zinc-950 shadow-md">
@@ -424,7 +496,7 @@ dispatch(setAgentsLoading(false))
               <button
                 type="submit"
                 aria-label="Send message"
-                disabled={!input.trim() || isSending}
+                disabled={!input.trim() || isSending || pendingActions.length > 0}
                 className="flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full bg-white text-zinc-950 shadow-md transition-all hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSending ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-5" />}

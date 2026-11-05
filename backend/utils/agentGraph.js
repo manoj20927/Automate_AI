@@ -2,15 +2,17 @@ import { ChatGroq } from "@langchain/groq"
 import {
   StateGraph,
   MessagesAnnotation,
+  interrupt,
 } from "@langchain/langgraph";
 import { MongoDBSaver } from "@langchain/langgraph-checkpoint-mongodb";
 import { MongoClient } from "mongodb";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { SystemMessage } from "@langchain/core/messages";
+import { SystemMessage, ToolMessage } from "@langchain/core/messages";
 import dotenv from "dotenv";
 import { getMcpTools } from "../mcp/langGraph-mcp-adapter.js";
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
+import { createActionTools } from "./actionTools.js";
 dotenv.config();
 const llm = new ChatGroq({
     model: "openai/gpt-oss-120b",
@@ -54,6 +56,9 @@ if(websearchTool){
     }))
 }
 
+// Email, calendar and Instagram run here, not in the MCP server, because they need the logged-in user
+finalTools.push(...createActionTools(userId))
+
 const llmWithTools = llm.bindTools(finalTools);
 
 const approvalTools= new Set(["send_email", "create_calendar_event", "publish_instagram_image"]); // Add tool names that require approval
@@ -65,7 +70,7 @@ const currentDatetTime = new Intl.DateTimeFormat("en-US", {
  timeStyle: "long",
 }).format(new Date());
 
-const basePrompt = `You are an AI assistant that helps users with their tasks. The current date and time is ${currentDatetTime}. Please provide helpful and accurate responses to the user's queries.`;
+const basePrompt = `You are an AI assistant that helps users with their tasks. The current date and time is ${currentDatetTime}. Please provide helpful and accurate responses to the user's queries. When the user asks you to send an email, create a calendar event, or publish on Instagram, call the tool directly once you have the details: the app shows the user an approval card, so do not ask for confirmation yourself. If a required detail is missing, ask for it. Never invent email addresses or image URLs.`;
 
 // An agent's system prompt is passed per request, so it isn't saved in the chat history
 const agentPrompt = config?.configurable?.systemPrompt
@@ -84,9 +89,22 @@ return {
 
 }
 const toolNode = new ToolNode(finalTools);
-// Placeholder: approves every tool call. Add checks here for risky actions (e.g. sending emails)
+// Pauses the graph until the user approves or cancels. The answer arrives through agentApprove in the controller
 const actionApprovalNode = async (state)=>{
-    return {}
+    const toolCalls = state.messages[state.messages.length - 1].tool_calls
+    const decision = interrupt({
+        actions: toolCalls.map(({name,args})=>({name,args})),
+    })
+    if(decision?.approved){
+        return {}
+    }
+    return {
+        messages: toolCalls.map((call)=>new ToolMessage({
+            tool_call_id: call.id,
+            name: call.name,
+            content: "The user cancelled this action. Do not try it again unless they ask.",
+        })),
+    }
 };
 // After chat: if the model asked for a tool, go to approval, otherwise finish
 const routeAfterChat = (state)=>{
@@ -100,9 +118,10 @@ const routeAfterChat = (state)=>{
   ))
   return requiresApproval ? "actionApprovalNode" : "toolNode"
 }
-// After approval: run the tools
+// After approval: run the tools. If cancelled, the tool messages are already added, so go back to chat
 const routeAfterApproval = (state)=>{
-    return "toolNode"
+    const lastMessage = state.messages[state.messages.length - 1]
+    return lastMessage.getType() === "tool" ? "chatNode" : "toolNode"
 }
 const workflow = new StateGraph(MessagesAnnotation)
 .addNode("chatNode", chatNode)
@@ -110,7 +129,7 @@ const workflow = new StateGraph(MessagesAnnotation)
 .addNode("actionApprovalNode", actionApprovalNode)
 .addEdge("__start__", "chatNode")
 .addConditionalEdges("chatNode", routeAfterChat, ["actionApprovalNode", "toolNode", "__end__"])
-.addConditionalEdges("actionApprovalNode", routeAfterApproval, ["toolNode"])
+.addConditionalEdges("actionApprovalNode", routeAfterApproval, ["toolNode", "chatNode"])
 .addEdge("toolNode", "chatNode")
 
 const chatAgentGraph = workflow.compile({checkpointer})
